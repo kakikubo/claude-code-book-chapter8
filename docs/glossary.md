@@ -51,12 +51,15 @@ stateDiagram-v2
     in_progress --> completed: task done
     completed --> archived: task archive
     open --> archived: task archive
+    in_progress --> open: task reopen（P2・将来実装）
+    completed --> open: task reopen（P2・将来実装）
 ```
 
 **ビジネスルール**:
 - `open` → `completed` への直接遷移は禁止（`task start` を経由する必要がある）
 - `archived` 状態のタスクはそれ以上のステータス変更は行わない
 - `task list` はデフォルトで `archived` を除外して表示する
+- `task reopen`（P2・将来実装）は `in_progress` または `completed` から `open` に戻すために使用する
 
 **英語表記**: Task Status
 
@@ -237,11 +240,58 @@ task list --sort priority
 
 **定義**: Gitフックを簡単に設定するためのツール。コミット前に自動でコマンドを実行する。
 
-**本プロジェクトでの用途**: `pre-commit` フックで `lint-staged`（ESLint + Prettier）を実行し、品質を保つ。
+**本プロジェクトでの用途**: `pre-commit` フックで以下の 2 段階を実行し、品質を保つ。
+
+1. `npx lint-staged` — 変更ファイル単位で ESLint + Prettier を適用
+2. `npm run typecheck` — リポジトリ全体の `tsc --noEmit` による型チェック
 
 **バージョン**: ^9.0.0
 
 **設定ファイル**: `.husky/pre-commit`
+
+**関連ドキュメント**: [開発ガイドライン](./development-guidelines.md)（自動化セクション）
+
+---
+
+### chalk
+
+**定義**: ターミナルに色付きテキストを出力するための Node.js ライブラリ。
+
+**本プロジェクトでの用途**: `Formatter` でステータスごとのカラーコーディング（`in_progress` 黄色 / `completed` 緑 / 期限超過の赤など）に使用する。
+
+**バージョン**: ^5.0.0
+
+**選定理由**: ESM 対応済み、軽量でシンプルな API。
+
+**関連用語**: [Formatter](#formatter)
+
+---
+
+### cli-table3
+
+**定義**: ターミナルにテーブル形式の表を描画する Node.js ライブラリ。Unicode 罫線対応・列幅自動調整が可能。
+
+**本プロジェクトでの用途**: `task list` の一覧表示で、ID・ステータス・タイトル・ブランチをテーブルとして整形する。
+
+**バージョン**: ^0.6.0
+
+**関連用語**: [Formatter](#formatter)
+
+---
+
+### Formatter
+
+**定義**: CLI レイヤーの表示ユーティリティ。タスクのテーブル表示・詳細表示・成功/警告/エラーメッセージの整形を担う。
+
+**本プロジェクトでの実装**: `src/cli/Formatter.ts`
+
+**主な責務**:
+- `displayTable(tasks)` — タスク一覧をテーブル形式で表示（cli-table3）
+- `displayTask(task)` — タスク詳細を表示
+- カラーコーディング — chalk を使ったステータス・期限警告の色分け
+- メッセージプレフィックス — `[OK]` / `[WARNING]` / `[ERROR]` の整形
+
+**関連用語**: [chalk](#chalk)、[cli-table3](#cli-table3)、[CLI](#cli)
 
 ---
 
@@ -266,6 +316,22 @@ task list --sort priority
 **意味**: データの基本操作4種（作成・読み取り・更新・削除）。
 
 **本プロジェクトでの使用**: タスクの基本操作（`task add`・`task show`・`task done`・`task delete`）を指す場面で使用する。
+
+---
+
+### ESM
+
+**正式名称**: ECMAScript Modules
+
+**意味**: ECMAScript 標準のモジュール形式。`import` / `export` 構文を使用する。CommonJS（`require` / `module.exports`）に代わる現代的な形式。
+
+**本プロジェクトでの使用**: `package.json` の `"type": "module"` で ESM を有効化している。`tsconfig.json` の `module: "ESNext"`・`moduleResolution: "bundler"` と併用する。
+
+**関連設定**:
+- `package.json`: `"type": "module"`
+- `tsconfig.json`: `"module": "ESNext"`、`"moduleResolution": "bundler"`（拡張子省略を許容）
+
+**関連ドキュメント**: [リポジトリ構造定義書](./repository-structure.md)、[アーキテクチャ設計書](./architecture.md)
 
 ---
 
@@ -318,20 +384,25 @@ task list --sort priority
 **本プロジェクトでの適用**: 3層構造を採用している。
 
 ```
-CLIレイヤー (src/cli/)       ← ユーザー入力・表示
+CLIレイヤー (src/cli/)                     ← ユーザー入力・表示
     ↓
-サービスレイヤー (src/services/)  ← ビジネスロジック
+サービスレイヤー (src/services/)            ← ビジネスロジック
     ↓
-データレイヤー (StorageService)   ← ファイルI/O
+データアクセス境界 (StorageService /        ← ファイル I/O 集約
+                   ConfigService)
 ```
 
 **メリット**: 関心の分離・各レイヤーを独立してテスト可能・変更の影響範囲が限定的
 
 **依存関係のルール**:
-- ✅ CLIレイヤー → サービスレイヤー
-- ✅ サービスレイヤー → データレイヤー
+- ✅ CLIレイヤー → サービスレイヤー（TaskService / GitService / GitHubService）
+- ✅ CLIレイヤー → ConfigService（`task config` コマンドからの直接呼び出しを許可）
+- ✅ サービスレイヤー → データアクセス境界（StorageService / ConfigService 経由）
 - ❌ サービスレイヤー → CLIレイヤー（禁止）
-- ❌ CLIレイヤー → データレイヤーの直接アクセス（禁止）
+- ❌ CLIレイヤー → ファイルシステム直接アクセス（禁止）
+- ❌ サービスレイヤー → ファイルシステム直接アクセス（禁止、StorageService / ConfigService 経由のみ）
+
+**関連用語**: [データアクセス境界](#データアクセス境界-data-access-boundary)、[サービスレイヤー](#サービスレイヤー-service-layer)、[IStorageService](#istorageservice)
 
 **関連ドキュメント**: [アーキテクチャ設計書](./architecture.md)、[リポジトリ構造定義書](./repository-structure.md)
 
@@ -339,16 +410,70 @@ CLIレイヤー (src/cli/)       ← ユーザー入力・表示
 
 ### サービスレイヤー (Service Layer)
 
-**定義**: ビジネスロジックを担うレイヤー。CLIレイヤーからの呼び出しを受け、データレイヤーを使ってデータを操作する。
+**定義**: ビジネスロジックを担うレイヤー。CLIレイヤーからの呼び出しを受け、データアクセス境界を通じてデータを操作する。
 
 **本プロジェクトでの実装**:
-- `TaskService`: タスクCRUD
-- `GitService`: Gitブランチ操作
-- `GitHubService`: GitHub API連携
-- `StorageService`: JSONファイル永続化
-- `ConfigService`: 設定ファイル管理
+
+| クラス | 種別 | 役割 |
+|------|------|------|
+| `TaskService` | ビジネスロジック | タスク CRUD・ステータス遷移 |
+| `GitService` | ビジネスロジック | Git ブランチ操作（simple-git ラッパー） |
+| `GitHubService` | ビジネスロジック | GitHub API 連携（Issues / PR） |
+| `StorageService` | データアクセス境界 | `.task/tasks.json` の読み書き・バックアップ |
+| `ConfigService` | データアクセス境界 | `~/.taskcli/config.json` の管理 |
+
+**配置上の注意**: `StorageService` と `ConfigService` は物理的にはサービスレイヤー（`src/services/`）に配置されるが、論理的には永続化を担う「データアクセス境界」として位置付けられる（[データアクセス境界](#データアクセス境界-data-access-boundary) 参照）。
 
 **英語表記**: Service Layer
+
+---
+
+### データアクセス境界 (Data Access Boundary)
+
+**定義**: ファイルシステム I/O を集約する責務を持つクラス群。永続化の関心事をここに閉じ込め、他のサービスから `fs` モジュールを直接呼び出すことを禁止する。
+
+**本プロジェクトでの該当クラス**:
+- `StorageService` — タスクデータ（`.task/tasks.json`）の読み書き・バックアップ
+- `ConfigService` — 設定ファイル（`~/.taskcli/config.json`）の読み書き、パーミッション 600 の強制
+
+**設計意図**:
+- 永続化処理を 2 クラスに集約することで、将来 SQLite に移行する際の影響範囲を限定する
+- ビジネスロジック（タスク状態遷移・バリデーション等）はここに置かない
+- `IStorageService` 抽象を満たす実装クラスを差し替えるだけで、ストレージ方式の切り替えを可能にする
+
+**配置**: `src/services/StorageService.ts`、`src/services/ConfigService.ts`
+
+**関連用語**: [サービスレイヤー](#サービスレイヤー-service-layer)、[IStorageService](#istorageservice)、[TaskStore](#taskstore)
+
+**関連ドキュメント**: [アーキテクチャ設計書](./architecture.md)（データ永続化戦略・スケーラビリティ設計）
+
+**英語表記**: Data Access Boundary
+
+---
+
+### IStorageService
+
+**定義**: タスクデータの永続化を抽象化するインターフェース。具象クラス（`JsonStorageService` など）はこの契約を満たす実装を提供する。
+
+**シグネチャ**:
+
+```typescript
+interface IStorageService {
+  load(): TaskStore;
+  save(store: TaskStore): void;
+  backup(): void;
+}
+```
+
+**設計意図**: 将来の SQLite 移行を容易にするため、ストレージ実装をインターフェースで抽象化する。MVP では `JsonStorageService` のみを実装し、移行時には `SqliteStorageService` を新規実装して差し替える。
+
+**現在の実装**: `JsonStorageService implements IStorageService`（`src/services/StorageService.ts`）
+
+**テストでの活用**: ユニットテストでは `IStorageService` 型のモックを作成し、ファイル I/O を発生させずにビジネスロジックを検証する（[development-guidelines.md](./development-guidelines.md) のモック使用方針参照）。
+
+**関連用語**: [データアクセス境界](#データアクセス境界-data-access-boundary)、[TaskStore](#taskstore)
+
+**英語表記**: IStorageService
 
 ---
 
@@ -356,7 +481,7 @@ CLIレイヤー (src/cli/)       ← ユーザー入力・表示
 
 **定義**: タスクデータを永続化するJSONファイル（`.task/tasks.json`）のルートデータ構造。
 
-**説明**: `version`（データフォーマットバージョン）と `tasks`（タスク配列）を持つ。将来のSQLiteへの移行時にフォーマットバージョンで判定できるよう設計されている。
+**説明**: `version`（データフォーマットバージョン）と `tasks`（タスク配列）を持つ。将来のSQLiteへの移行時、または JSON フォーマット変更時にバージョン番号でマイグレーション要否を判定する。
 
 ```typescript
 interface TaskStore {
@@ -365,7 +490,54 @@ interface TaskStore {
 }
 ```
 
+**マイグレーション戦略**: メジャーバージョンアップ時は `StorageService.migrate()` で旧フォーマットを変換し、変換前データを `.task/tasks.json.v[旧バージョン].bak` として退避する（[architecture.md データマイグレーション戦略](./architecture.md) 参照）。
+
 **英語表記**: TaskStore
+
+---
+
+### Config
+
+**定義**: TaskCLI の設定ファイル（`~/.taskcli/config.json`）のルートデータ構造。
+
+**説明**: GitHub 連携情報（PAT・owner・repo）と Git ブランチ命名のデフォルトプレフィックスを保持する。ファイルパーミッションは 600（所有者のみ読み書き）に強制設定される。
+
+```typescript
+interface Config {
+  github?: {
+    token: string;        // Personal Access Token
+    owner: string;        // GitHub ユーザー名 / Org 名
+    repo: string;         // リポジトリ名
+  };
+  git?: {
+    defaultBranchPrefix: string; // デフォルト: "feature"
+  };
+}
+```
+
+**保存先**: `~/.taskcli/config.json`（パーミッション 600）
+
+**設定コマンド**: `task config --github-token <token>`、`task config --show`（トークンは先頭4文字以外をマスク表示）
+
+**関連用語**: [PAT](#pat)、[データアクセス境界](#データアクセス境界-data-access-boundary)（ConfigService）
+
+**英語表記**: Config
+
+---
+
+### task reopen（P2・将来実装）
+
+**定義**: `in_progress` または `completed` 状態のタスクを `open` に戻すコマンド。
+
+**用途**: レビュー差し戻しなどで作業の再開が必要になった場合に使用する。
+
+**ステータス**: P2（Post-MVP）。MVP 範囲外のため現時点では未実装。
+
+**コマンド**: `task reopen <id>`
+
+**関連用語**: [タスクステータス](#タスクステータス-task-status)
+
+**関連ドキュメント**: [プロダクト要求定義書](./product-requirements.md)（P2 機能）
 
 ---
 
@@ -438,7 +610,9 @@ throw new ValidationError(
 - [アーカイブ（タスクステータス）](#タスクステータス-task-status)
 
 ### か行
+- [コマンダー → Commander.js](#commanderjs)
 - [コンテキストスイッチ](#コンテキストスイッチ-context-switch)
+- [Config](#config)
 
 ### さ行
 - [サービスレイヤー](#サービスレイヤー-service-layer)
@@ -449,12 +623,16 @@ throw new ValidationError(
 - [タスク](#タスク-task)
 - [タスクID](#タスクid-task-id)
 - [タスクステータス](#タスクステータス-task-status)
+- [task reopen](#task-reopenp2将来実装)
 - [TaskStore](#taskstore)
+- [データアクセス境界](#データアクセス境界-data-access-boundary)
 
 ### な行
-- [NotFoundError](#notfounderror)
+- [NotFoundError → な行参照](#notfounderror)
 
 ### は行
+- [バリデーションエラー → ValidationError](#validationerror)
+- [フォーマッター → Formatter](#formatter)
 - [ブランチ連携](#ブランチ連携-branch-integration)
 
 ### ま行
@@ -470,15 +648,24 @@ throw new ValidationError(
 - [永続ドキュメント](#永続ドキュメント-persistent-document)
 
 ### A-Z
+- [chalk](#chalk)
 - [CLI](#cli)
+- [cli-table3](#cli-table3)
 - [Commander.js](#commanderjs)
+- [Config](#config)
 - [CRUD](#crud)
+- [ESM](#esm)
+- [Formatter](#formatter)
 - [GitError](#giterror)
 - [Husky](#husky)
+- [IStorageService](#istorageservice)
+- [NotFoundError](#notfounderror)
 - [Octokit](#octokit)
 - [PAT](#pat)
 - [PRD](#prd)
 - [simple-git](#simple-git)
+- [task reopen](#task-reopenp2将来実装)
+- [TaskStore](#taskstore)
 - [UUID](#uuid)
 - [ValidationError](#validationerror)
 - [Vitest](#vitest)
