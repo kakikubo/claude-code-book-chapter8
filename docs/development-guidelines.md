@@ -31,14 +31,28 @@ class TaskService { }
 class GitService { }
 class StorageService { }
 
-// インターフェース: PascalCase（I接頭辞なし）
+// インターフェース（原則）: PascalCase、I接頭辞なし
 interface Task { }
 interface Config { }
-interface IStorageService { }  // 実装と区別が必要な場合のみI接頭辞
+interface TaskStore { }
 
 // 型エイリアス: PascalCase
 type TaskStatus = 'open' | 'in_progress' | 'completed' | 'archived';
 type TaskPriority = 'high' | 'medium' | 'low';
+```
+
+**例外: I 接頭辞の使用**
+
+実装クラスと抽象を同一ファイル / 同一名空間内で並存させ、両者を呼び分ける必要がある場合に限り I 接頭辞を使用します。
+
+```typescript
+// 抽象（永続化境界）と具象（JSON / SQLite）を区別する場合に限り I 接頭辞を使う
+interface IStorageService {
+  load(): TaskStore;
+  save(store: TaskStore): void;
+}
+class JsonStorageService implements IStorageService { /* ... */ }
+// 将来: class SqliteStorageService implements IStorageService { ... }
 ```
 
 #### ファイル名
@@ -55,17 +69,21 @@ type TaskPriority = 'high' | 'medium' | 'low';
 ### コードフォーマット
 
 - **インデント**: 2スペース（Prettier で強制）
-- **行の長さ**: 最大100文字（`.prettierrc` で設定）
-- **セミコロン**: あり
-- **クォート**: シングルクォート
+- **行の長さ**: 最大80文字（`.prettierrc` の `printWidth` で設定）
+- **セミコロン**: あり（`semi: true`）
+- **クォート**: シングルクォート（`singleQuote: true`）
+- **末尾カンマ**: ES5 互換（`trailingComma: "es5"`）
+- **アロー関数の括弧**: 常時付与（`arrowParens: "always"`）
 
-フォーマットは `npm run format`（Prettier）で自動整形されます。手動で調整する必要はありません。
+フォーマットは `npm run format`（Prettier）で自動整形されます。設定は `.prettierrc` に集約されています。
 
 ---
 
 ### 型定義
 
-**`any` の禁止**:
+**`any` の原則禁止（ESLint で警告）**:
+
+`eslint.config.js` で `@typescript-eslint/no-explicit-any: 'warn'` を設定しており、`any` の使用は警告として検出されます。原則として `any` は使用せず、やむを得ず使う場合は理由コメント付きで `eslint-disable-next-line` を明示してください。
 
 ```typescript
 // ✅ 良い例: 具体的な型
@@ -73,7 +91,14 @@ function loadStore(): TaskStore {
   return JSON.parse(content) as TaskStore;
 }
 
-// ❌ 悪い例: any型
+// ✅ 例外的に許容: 理由を明示する
+// 外部 API の型が動的に変化するため any で受ける
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function handleExternal(payload: any): void {
+  // ...
+}
+
+// ❌ 悪い例: 理由なく any を使用
 function loadStore(): any {
   return JSON.parse(content);
 }
@@ -397,6 +422,10 @@ Closes #[番号]
 
 ## テスト戦略
 
+### 設定ファイル
+
+テスト設定は `vitest.config.ts` に集約します。`tsconfig.json` の `include` は `src/**` のみのため、`tests/**` を Vitest 側で明示的に対象に含めています。
+
 ### テストの種類と比率（テストピラミッド）
 
 ```
@@ -480,6 +509,10 @@ const mockStorage: IStorageService = {
 - [ ] エッジケースが考慮されているか（境界値・null・空配列など）
 - [ ] エラーハンドリングが適切か
 
+**パフォーマンス**:
+- [ ] [architecture.md のパフォーマンス要件](./architecture.md) を満たしているか（`task add` 100ms、`task list` 1,000件で 1 秒、`task sync` 5 秒以内など）
+- [ ] N+1 や不要なファイル I/O が発生していないか（同一コマンド実行中の `tasks.json` 多重読み込みなど）
+
 **セキュリティ**:
 - [ ] GitHub Token がログ・標準出力に露出していないか
 - [ ] 入力バリデーションが実装されているか
@@ -487,7 +520,7 @@ const mockStorage: IStorageService = {
 
 **可読性・保守性**:
 - [ ] 命名が明確か（略語・単一文字変数を使っていないか）
-- [ ] レイヤー間の依存方向が正しいか（CLI → Service → Data）
+- [ ] レイヤー間の依存方向が正しいか（CLI → Service → データアクセス境界）
 - [ ] 1ファイル300行以内か
 
 ### レビューコメントの書き方
@@ -513,11 +546,17 @@ const mockStorage: IStorageService = {
 
 ### 必要なツール
 
-| ツール | 最低バージョン | 確認方法 |
-|--------|-------------|---------|
-| Node.js | v18 | `node --version` |
-| npm | v9 | `npm --version` |
-| Git | v2.30 | `git --version` |
+| ツール | 最低バージョン | 開発環境バージョン | 確認方法 |
+|--------|-------------|------------------|---------|
+| Node.js | v18 | v24.11.0 | `node --version` |
+| npm | v9 | 11.x | `npm --version` |
+| Git | v2.30 | v2.40 以降推奨 | `git --version` |
+
+**プロジェクト構成**:
+
+- TypeScript: `~5.3.0`（`package.json` の `devDependencies` に記載、パッチのみ自動更新）
+- モジュール形式: ESM（`package.json` の `"type": "module"`）
+- 実行ランタイム: Node.js v18 以上で動作保証。詳細は [architecture.md](./architecture.md#テクノロジースタック) 参照
 
 ### セットアップ手順
 
@@ -546,22 +585,27 @@ npm run format       # Prettier でフォーマット
 npm test             # テストの実行（1回）
 npm run test:watch   # ウォッチモードでテスト実行
 npm run test:coverage# カバレッジ計測
+npm run test:ui      # Vitest UI を起動（ブラウザでテスト結果を確認）
 ```
 
 ### 自動化（Husky + lint-staged）
 
 コミット前に以下が自動実行されます（`.husky/pre-commit`）:
 
-1. `eslint --fix`（変更されたファイルのみ）
-2. `prettier --write`（変更されたファイルのみ）
+1. `npx lint-staged` — 変更ファイル単位で以下を実行
+    - `eslint --fix`（`*.{ts,tsx}` のみ）
+    - `prettier --write`（`*.{ts,tsx}` のみ）
+2. `npm run typecheck` — リポジトリ全体の `tsc --noEmit` による型チェック
 
-**注意**: `npm run typecheck` と `npm test` はコミット時には実行されません。PR 作成前に手動で確認してください。
+**注意**: `npm test` はコミット時には実行されません。PR 作成前に手動で確認してください。
 
 ---
 
 ## 品質自動化（CI/CD）
 
-将来的な GitHub Actions の設定例:
+**現状**: CI は未整備（`.github/workflows/` 配下にワークフロー未定義）。コミット時の品質担保は Husky + lint-staged + `npm run typecheck` に依存しています（前述の「自動化」セクション参照）。
+
+**CI 整備時のテンプレート**: 以下を `.github/workflows/ci.yml` として配置することで、push / PR をトリガーに型チェック・lint・テスト・ビルドを実行できます。
 
 ```yaml
 # .github/workflows/ci.yml
