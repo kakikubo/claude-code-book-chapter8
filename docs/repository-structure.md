@@ -7,8 +7,8 @@ claude-code-book-chapter8/       # TaskCLI プロジェクトルート
 ├── src/                         # ソースコード
 │   ├── cli/                     # CLIレイヤー（コマンド定義・表示）
 │   ├── services/                # サービスレイヤー（ビジネスロジック）
-│   ├── types/                   # 型定義
-│   └── index.ts                 # エントリーポイント
+│   ├── types/                   # 型定義（エラークラス含む）
+│   └── index.ts                 # エントリーポイント（#!/usr/bin/env node）
 ├── tests/                       # テストコード
 │   ├── unit/                    # ユニットテスト
 │   ├── integration/             # 統合テスト
@@ -25,18 +25,23 @@ claude-code-book-chapter8/       # TaskCLI プロジェクトルート
 │   ├── commands/                # スラッシュコマンド定義
 │   ├── skills/                  # タスクモード別スキル
 │   └── agents/                  # サブエージェント定義
-├── .steering/                   # 作業単位のドキュメント（Git 管理外推奨）
+├── .steering/                   # 作業単位のドキュメント（Git 管理外、`.gitkeep` のみ追跡）
 ├── .husky/                      # Git フック（コミット前 lint）
-├── .task/                       # タスクデータ（実行時に自動生成）
+├── .task/                       # タスクデータ（実行時に自動生成、デフォルトでは Git 管理対象）
 │   ├── tasks.json               # タスクデータ本体
 │   └── tasks.json.bak           # 直前バックアップ
+├── dist/                        # tsc ビルド成果物（自動生成、`.gitignore` 済み）
+│   └── index.js                 # `package.json` の "bin" / "main" エントリーポイント
+├── coverage/                    # `npm run test:coverage` の出力（自動生成、`.gitignore` 済み）
 ├── CLAUDE.md                    # Claude Code 向けプロジェクト指示
 ├── README.md                    # プロジェクト概要
-├── package.json                 # npm 設定・スクリプト
-├── tsconfig.json                # TypeScript 設定
-├── vitest.config.ts             # テスト設定
+├── package.json                 # npm 設定・スクリプト・"bin" / "main" 定義（"type": "module"）
+├── package-lock.json            # 依存ロックファイル（コミット対象）
+├── tsconfig.json                # TypeScript 設定（outDir: ./dist、moduleResolution: bundler）
+├── vitest.config.ts             # テスト設定（tests/** を対象）
 ├── eslint.config.js             # ESLint 設定
 ├── .prettierrc                  # Prettier 設定
+├── .prettierignore              # Prettier 除外設定
 └── .gitignore                   # Git 除外設定
 ```
 
@@ -115,9 +120,11 @@ src/services/
 - `Task.ts`: `Task`・`TaskStatus`・`TaskPriority` などのコア型定義
 - `Config.ts`: 設定ファイルの型定義
 - `Store.ts`: `TaskStore`（JSON ファイルのルート構造）の型定義
+- `errors.ts`: カスタムエラークラス（`ValidationError` / `NotFoundError` / `GitError`）
 
 **命名規則**:
-- `PascalCase`（例: `Task.ts`、`Config.ts`）
+- 型・インターフェース定義ファイル: `PascalCase`（例: `Task.ts`、`Config.ts`）
+- エラークラス集約ファイル: `errors.ts`（複数エラークラスを束ねるユーティリティのため小文字）
 
 **依存関係**:
 - 依存可能: なし（型定義のみのため）
@@ -126,14 +133,20 @@ src/services/
 **例**:
 ```
 src/types/
-├── Task.ts     # Task インターフェース・列挙型
-├── Config.ts   # Config インターフェース
-└── Store.ts    # TaskStore インターフェース
+├── Task.ts       # Task インターフェース・列挙型
+├── Config.ts     # Config インターフェース
+├── Store.ts      # TaskStore インターフェース
+└── errors.ts     # ValidationError / NotFoundError / GitError
 ```
 
 #### src/index.ts
 
 **役割**: CLI エントリーポイント。Commander.js のルートプログラムを生成し、各コマンドを登録して実行する。
+
+**npm パッケージとしての配置**:
+- 先頭にシェバン `#!/usr/bin/env node` を記述
+- `tsc` で `dist/index.js` にコンパイルされ、`package.json` の `"bin": { "task": "dist/index.js" }` および `"main": "dist/index.js"` から参照される
+- `npm install -g taskcli` 後は `task` コマンドとして利用可能（詳細は [architecture.md](./architecture.md) のビルド・配布節を参照）
 
 ```typescript
 // src/index.ts の構成イメージ
@@ -158,6 +171,8 @@ tests/unit/
 ├── services/
 │   ├── TaskService.test.ts
 │   ├── GitService.test.ts        # toBranchName のロジックテスト
+│   ├── GitHubService.test.ts     # Issue → Task マッピングのテスト
+│   ├── ConfigService.test.ts     # トークン保存・読み込み・マスク表示
 │   └── StorageService.test.ts
 └── cli/
     └── Formatter.test.ts
@@ -208,14 +223,14 @@ tests/e2e/
 
 ---
 
-### .task/ （実行時に自動生成）
+### 自動生成ディレクトリ
 
-**役割**: タスクデータの永続化。プロジェクトルートに生成される。
-
-**注意事項**:
-- `task add` など初回実行時に自動作成される
-- Git 管理に含めるかどうかはチームの判断（チーム共有する場合は `.gitignore` から除外）
-- デフォルトでは `.gitignore` に含める（個人のタスクデータを Git にコミットしない）
+| ディレクトリ | 生成タイミング | Git 管理 | 役割 |
+|------------|-------------|---------|------|
+| `dist/` | `npm run build` / `npm run dev` | 除外（`.gitignore` 済み） | TypeScript コンパイル成果物。`package.json` の `"main"` / `"bin"` のターゲット |
+| `coverage/` | `npm run test:coverage` | 除外（`.gitignore` 済み） | Vitest のカバレッジレポート |
+| `.task/` | `task add` 等の初回実行時 | デフォルトでは含める | タスクデータ（`tasks.json`・`tasks.json.bak`）。チーム共有を想定するため、個人利用で除外したい場合は各自で `.gitignore` に追加 |
+| `node_modules/` | `npm install` | 除外（`.gitignore` 済み） | npm 依存関係 |
 
 ---
 
@@ -258,12 +273,13 @@ tests/e2e/
 
 ### 設定ファイル
 
-| ファイル種別 | 配置先 | 命名規則 |
-|------------|--------|---------|
-| TypeScript 設定 | プロジェクトルート | `tsconfig.json` |
-| テスト設定 | プロジェクトルート | `vitest.config.ts` |
-| ESLint 設定 | プロジェクトルート | `eslint.config.js` |
-| Prettier 設定 | プロジェクトルート | `.prettierrc` |
+| ファイル種別 | 配置先 | 命名規則 | 備考 |
+|------------|--------|---------|------|
+| TypeScript 設定 | プロジェクトルート | `tsconfig.json` | `outDir: ./dist`、`moduleResolution: bundler`（拡張子省略を許容、Node.js ESM 互換） |
+| テスト設定 | プロジェクトルート | `vitest.config.ts` | `tests/**` をテスト対象に向ける（`tsconfig.json` の `include` は `src/**` のみのため） |
+| ESLint 設定 | プロジェクトルート | `eslint.config.js` | Flat Config 形式、ignores に `dist/**`・`.steering/**` を含む |
+| Prettier 設定 | プロジェクトルート | `.prettierrc` | `.prettierignore` で `docs/`・`.claude/` 等を除外 |
+| npm パッケージ設定 | プロジェクトルート | `package.json` | `"type": "module"`（ESM）、`"bin"` に CLI エントリーポイント定義 |
 
 ---
 
@@ -290,12 +306,17 @@ tests/e2e/
 ### レイヤー間の依存
 
 ```
-src/cli/ → src/services/ → （外部ライブラリ・Node.js）  ✅
+src/cli/ → src/services/（TaskService / GitService / GitHubService） ✅
+src/cli/ → src/services/ConfigService（task config から直接呼び出し可） ✅
 src/cli/ → src/types/                                   ✅
+src/services/ → src/services/（StorageService / ConfigService 経由） ✅
 src/services/ → src/types/                              ✅
 src/services/ → src/cli/                                ❌ 禁止
 src/cli/ → ファイルシステム直接アクセス                  ❌ 禁止
+src/services/ → ファイルシステム直接アクセス             ❌ 禁止（StorageService / ConfigService 経由）
 ```
+
+**補足**: 永続化（ファイル I/O）は `StorageService`（タスクデータ）と `ConfigService`（設定）に集約する。詳細は [architecture.md](./architecture.md) の「データアクセス境界」を参照。
 
 ### 循環依存の禁止
 
@@ -305,23 +326,76 @@ src/cli/ → ファイルシステム直接アクセス                  ❌ 禁
 
 ## 除外設定
 
-### .gitignore に含めるべきファイル
+### .gitignore（実ファイル準拠）
 
 ```
+# 一時ファイル
+tmp/
+
+# Node.js / ログ
 node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ビルド成果物
 dist/
-.task/               # タスクデータ（チーム共有しない場合）
-*.log
-.DS_Store
+build/
+*.tsbuildinfo
+
+# 環境変数
 .env
+.env.local
+.env.*.local
+
+# 各種ログ
+logs/
+*.log
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# テスト出力
 coverage/
+.nyc_output/
+
+# Steering files（作業単位ドキュメント。.gitkeep のみ追跡）
+.steering/*
+!.steering/.gitkeep
+
+# Claude Code のローカル設定
+.claude/settings.local.json
 ```
 
-### .prettierignore / ESLint の除外対象
+**`.task/` の扱い**: デフォルトでは `.gitignore` に含めない（プロジェクト内データはチーム共有を想定）。個人で Git に含めたくない場合は各自の判断で `.gitignore` に追加する。
+
+### .prettierignore（実ファイル準拠）
 
 ```
-dist/
-node_modules/
+# ドキュメント・設定ディレクトリ
+.claude/
 .steering/
-coverage/
+docs/
+CLAUDE.md
+
+# ログファイル
+*log.json
+
+# 依存関係 / ビルド成果物
+node_modules/
+dist/
+```
+
+### ESLint ignores（`eslint.config.js` 準拠）
+
+```
+node_modules/**
+dist/**
+.steering/**
 ```
