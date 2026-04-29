@@ -9,6 +9,7 @@ graph TB
     TaskService[TaskService]
     GitService[GitService]
     GitHubService[GitHubService]
+    ConfigService[ConfigService]
     StorageService[StorageService]
     TaskJSON[(.task/tasks.json)]
     ConfigJSON[(~/.taskcli/config.json)]
@@ -19,6 +20,7 @@ graph TB
     CLI --> TaskService
     CLI --> GitService
     CLI --> GitHubService
+    CLI --> ConfigService
     TaskService --> StorageService
     GitService --> Git
     GitHubService --> GitHub
@@ -33,14 +35,14 @@ graph TB
 
 | 分類 | 技術 | 選定理由 |
 |------|------|----------|
-| 言語 | TypeScript 5.x | 型安全・IDE補完・Node.jsエコシステム |
+| 言語 | TypeScript 5.x（`~5.3.0`） | 型安全・IDE補完・Node.jsエコシステム |
 | CLIフレームワーク | Commander.js | 学習コストが低く機能十分、広く使われている |
 | Git操作 | simple-git | Node.jsからGitを安全に操作できる高水準ライブラリ |
 | GitHub連携 | Octokit REST | GitHubの公式クライアントライブラリ |
 | ターミナル出力 | chalk + cli-table3 | カラー出力とテーブル表示の定番ライブラリ |
 | データ保存 | JSON（将来はSQLite） | MVPはシンプルなJSON、SQLite移行パスを設計上確保 |
 | テスト | Vitest | TypeScriptと相性が良く高速 |
-| ランタイム | Node.js v18以上（開発環境: v24.x） | LTS版、広く普及 |
+| ランタイム | Node.js v18以上（開発環境: v24.11.0） | LTS版、広く普及 |
 
 ---
 

@@ -6,9 +6,9 @@
 
 | 技術 | バージョン | 選定理由 |
 |------|-----------|----------|
-| Node.js | v18以上（開発環境: v24.15.0） | 非同期I/O処理に優れ、CLIツールのランタイムとして広く普及。npm エコシステムが充実しており必要なライブラリの入手が容易 |
-| TypeScript | ~5.3.0 | 静的型付けによりコンパイル時にバグを検出でき保守性が向上。IDEの補完が強力で開発効率が高い |
-| npm | 11.x | Node.js に標準搭載。package-lock.json による依存関係の厳密な管理が可能 |
+| Node.js | v18以上（開発環境: v24.11.0） | 非同期I/O処理に優れ、CLIツールのランタイムとして広く普及。npm エコシステムが充実しており必要なライブラリの入手が容易 |
+| TypeScript | `~5.3.0`（5.x 系、パッチのみ自動更新） | 静的型付けによりコンパイル時にバグを検出でき保守性が向上。IDEの補完が強力で開発効率が高い |
+| npm | v9 以上（開発環境: 11.x） | Node.js に標準搭載。package-lock.json による依存関係の厳密な管理が可能 |
 
 ### フレームワーク・ライブラリ（追加予定）
 
@@ -44,20 +44,26 @@
 ├─────────────────────────────────────────────────────┤
 │   サービスレイヤー (src/services/)                    │
 │   - ビジネスロジックの実装                             │
-│   - TaskService / GitService / GitHubService / etc.  │
-├─────────────────────────────────────────────────────┤
-│   データレイヤー (src/services/StorageService.ts)     │
-│   - JSON ファイルへの読み書き                         │
-│   - バックアップ管理                                  │
+│   - TaskService / GitService / GitHubService /        │
+│     ConfigService                                     │
+│   ┌───────────────────────────────────────────────┐ │
+│   │ データアクセス境界 (src/services/Storage*.ts)   │ │
+│   │ - StorageService: JSON ファイル I/O・バックアップ│ │
+│   │ - ConfigService:  設定ファイル I/O              │ │
+│   │ サービスレイヤー内に配置するが、永続化を担う      │ │
+│   │ 唯一の境界として将来の SQLite 化で抽象化する     │ │
+│   └───────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────┘
 ```
+
+**配置と役割の関係**: `StorageService` と `ConfigService` は物理的には `src/services/` に配置（[repository-structure.md](./repository-structure.md) 参照）するが、論理的には永続化レイヤー（データアクセス境界）として機能する。他のサービスからファイルシステムへの直接アクセスを禁止し、永続化の関心事をこの2クラスに集約することで、将来の SQLite 移行を容易にする。
 
 **依存方向の原則**:
 
 ```
-CLIレイヤー → サービスレイヤー → データレイヤー  ✅
-CLIレイヤー → データレイヤー（直接アクセス）      ❌
-サービスレイヤー → CLIレイヤー                   ❌
+CLIレイヤー → サービスレイヤー → データアクセス境界（StorageService / ConfigService） ✅
+CLIレイヤー → ファイルシステム直接アクセス      ❌
+サービスレイヤー → CLIレイヤー                  ❌
 ```
 
 #### CLIレイヤー（`src/cli/`）
@@ -66,14 +72,15 @@ CLIレイヤー → データレイヤー（直接アクセス）      ❌
 - **禁止される操作**: StorageService・ファイルシステムへの直接アクセス
 
 #### サービスレイヤー（`src/services/`）
-- **責務**: ビジネスロジックの実装（タスク CRUD、Git 操作、GitHub 連携）
-- **許可される操作**: 他サービスの呼び出し、StorageService の呼び出し
+- **責務**: ビジネスロジックの実装（タスク CRUD、Git 操作、GitHub 連携、設定管理、永続化）
+- **許可される操作**: 他サービスの呼び出し、StorageService / ConfigService 経由でのファイル I/O
 - **禁止される操作**: ターミナル出力、Commander.js の直接依存
 
-#### データレイヤー（`StorageService`）
-- **責務**: JSON ファイルへの読み書き、バックアップ作成
+#### データアクセス境界（`StorageService` / `ConfigService`）
+- **責務**: JSON ファイルへの読み書き、バックアップ作成、設定ファイル管理
+- **配置**: サービスレイヤー（`src/services/`）の一員として配置するが、永続化の境界として他のサービスから利用される
 - **許可される操作**: Node.js fs モジュールの使用
-- **禁止される操作**: ビジネスロジックの実装
+- **禁止される操作**: ビジネスロジックの実装（タスクのバリデーション・状態遷移ルールはここに置かない）
 
 ### システム全体構成図
 
@@ -105,6 +112,7 @@ graph TB
     Commander --> TaskService
     Commander --> GitService
     Commander --> GitHubService
+    Commander --> ConfigService
     TaskService --> StorageService
     GitService --> GitRepo
     GitHubService --> GitHub
@@ -152,14 +160,17 @@ graph TB
 | `task list`（10,000件） | 5秒 以内 | 同上 |
 | `task start`（Gitブランチ作成含む） | 500ms 以内 | 同上 |
 | `task import --github` | 5秒 以内 | GitHub API レスポンス次第。タイムアウト設定: 10秒 |
+| `task sync`（GitHub Issues 双方向同期） | 5秒 以内 | GitHub API レスポンス次第。タイムアウト設定: 10秒 |
 
 ### リソース使用量
 
 | リソース | 上限 | 理由 |
 |---------|------|------|
-| メモリ | 128MB | CLIツールとして常駐しない想定。Node.js 起動オーバーヘッドを含む |
+| プロセスのヒープ使用量 | 128MB 以内 | CLIツールとして常駐しない想定。Node.js 起動分のオーバーヘッドを除いた CLI プロセス自身の使用量 |
 | CPU | 一時的なスパイクのみ | 非同期処理でブロッキングを回避 |
 | ディスク | 10MB（データ除く） | npm パッケージのインストールサイズ |
+
+**動作保証システム要件**: 上記の上限とは別に、Node.js ランタイム全体を含む最小システムメモリは 256MB 以上を要求する（後述の「環境要件」を参照）。
 
 ---
 
@@ -208,6 +219,33 @@ interface IStorageService {
 - **GitHub 以外の Git ホスティング対応**: `GitHubService` を抽象化し、GitLab・Bitbucket 対応を将来実装できる設計とする
 - **プラグインシステム**: MVP 範囲外だが、`~/.taskcli/plugins/` ディレクトリを将来のプラグイン配置場所として設計上確保する
 
+### データマイグレーション戦略
+
+`TaskStore.version` フィールドでデータフォーマットのバージョンを保持し、`StorageService.load()` 内で読み込み時にバージョンチェックを行う。
+
+- **互換性ポリシー**: パッチ・マイナーバージョンアップでは既存データを後方互換で読み込む
+- **メジャーバージョンアップ時**: `StorageService` 内に `migrate(oldStore, fromVersion, toVersion)` メソッドを設け、起動時に旧フォーマットを新フォーマットに変換し、変換前データを `.task/tasks.json.v[旧バージョン].bak` として退避する
+- **将来の SQLite 移行**: `IStorageService` 抽象を満たす `SqliteStorageService` を実装し、初回起動時に既存 JSON データを SQLite に取り込むワンタイムマイグレーションを実施する
+
+---
+
+## ビルド・配布
+
+### TypeScript コンパイル
+
+- **ソース**: `src/**/*.ts`
+- **出力先**: `dist/`（`tsc` の `outDir` で指定。`.gitignore` に含める）
+- **モジュールフォーマット**: ESM（`package.json` の `"type": "module"`）
+
+### npm パッケージとしてのエントリーポイント
+
+- **`package.json` フィールド**:
+  - `"main"`: `dist/index.js`
+  - `"bin"`: `{ "task": "dist/index.js" }`（`task` コマンドとして利用可能にする）
+  - `"files"`: `["dist", "README.md", "LICENSE"]`（npm publish 時の同梱対象）
+- **シェバン**: `src/index.ts` の先頭に `#!/usr/bin/env node` を記載し、コンパイル後の `dist/index.js` から直接実行可能にする
+- **想定インストール**: `npm install -g taskcli` でグローバルインストールし、`task <subcommand>` として利用する
+
 ---
 
 ## テスト戦略
@@ -216,7 +254,10 @@ interface IStorageService {
 
 - **フレームワーク**: Vitest
 - **対象**: `TaskService`・`StorageService`・`GitService.toBranchName`・入力バリデーション関数
-- **カバレッジ目標**: サービスレイヤー 80% 以上
+- **カバレッジ目標**:
+  - サービスレイヤー（`src/services/`）: 80% 以上
+  - CLI レイヤー（`src/cli/`）: 60% 以上
+  - 主要なユーザーフロー（E2E）: 100%
 - **方針**: 外部依存（ファイルシステム・Git・GitHub API）はモックを使用
 
 ### 統合テスト
@@ -241,7 +282,7 @@ interface IStorageService {
 - **必須ランタイム**: Node.js v18 以上（`node --version` で確認）
 - **必須外部依存**: Git（`git --version` で確認）
 - **オプション外部依存**: GitHub Personal Access Token（GitHub 連携機能のみ必要）
-- **最小メモリ**: 256MB（Node.js 起動分を含む）
+- **最小システムメモリ**: 256MB 以上（Node.js ランタイム全体を含む。CLI プロセスのヒープ上限 128MB とは別の指標）
 - **最小ディスク**: インストール先に 50MB の空き容量
 
 ### パフォーマンス制約
